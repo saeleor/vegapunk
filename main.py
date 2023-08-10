@@ -1,80 +1,12 @@
 import openai
 import json
-from typing import Union
+from typing import Type, Union
 
-model = 'gpt-3.5-turbo'
+class OpenAICommunicator:
+    def __init__(self, model: str = 'gpt-3.5-turbo'):
+        self.model = model
 
-ethos_layer = None
-strategy_layer = None
-identity_layer = None
-planning_layer = None
-control_layer = None
-execution_layer = None
-
-def get_layer_mapping():
-    global ethos_layer, strategy_layer, identity_layer, planning_layer, control_layer, execution_layer
-
-    ethos_layer = EthosLayer()
-    strategy_layer = StrategyLayer()
-    identity_layer = IdentityLayer()
-    planning_layer = PlanningLayer()
-    control_layer = ControlLayer()
-    execution_layer = ExecutionLayer()
-
-    return {
-        "EthosLayer": ethos_layer,
-        "StrategyLayer": strategy_layer,
-        "IdentityLayer": identity_layer,
-        "PlanningLayer": planning_layer,
-        "ControlLayer": control_layer,
-        "ExecutionLayer": execution_layer
-    }
-
-class Layer:
-    layer_union_type = Union['StrategyLayer', 'IdentityLayer', 'PlanningLayer',
-                             'ControlLayer', 'ExecutionLayer', 'EthosLayer']
-
-    def __init__(self, role, system_prompt):
-        self.system_prompt = system_prompt
-        self.role = role
-
-    def ask_layer(self, target_layer: layer_union_type, message):
-        """Send a message to the specified layer."""
-        layer_mapping = get_layer_mapping()
-
-        if isinstance(target_layer, str):
-            target_layer = layer_mapping.get(target_layer)
-
-        if not isinstance(target_layer, (EthosLayer, StrategyLayer, IdentityLayer, PlanningLayer, ControlLayer, ExecutionLayer)):
-            raise ValueError("target_layer must be an instance of one of the Layer subclasses.")
-
-        messages = [
-            {
-                "role": "system",
-                "content": f"""
-                    You are the {target_layer.role} layer.
-                    You are about to receive a message from the {self.role} layer.
-                """
-            },
-            {
-                "role": "user",
-                "content": message
-            }
-        ]
-        response = openai.ChatCompletion.create(
-            model=model,
-            messages=messages,
-        )
-        response_message = response["choices"][0]["message"]["content"]
-
-        print(f"{target_layer.role} (to {self.role}): {response_message}")
-        return response_message
-
-    def chat(self, message):
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": message}
-        ]
+    def communicate(self, layer, messages: list) -> str:
         functions = [
             {
                 "name": "ask_layer",
@@ -82,7 +14,7 @@ class Layer:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "target_layer": {
+                        "target_layer_class": {
                             "type": "string",
                             "description": "The layer you want to talk to.",
                             "enum": ["EthosLayer", "StrategyLayer", "IdentityLayer", "PlanningLayer", "ControlLayer", "ExecutionLayer"]
@@ -92,27 +24,27 @@ class Layer:
                             "description": "The message you want to send."
                         }
                     },
-                    "required": ["target_layer", "message"]
+                    "required": ["target_layer_class", "message"]
                 }
             },
         ]
         response = openai.ChatCompletion.create(
-            model=model,
+            model=self.model,
             messages=messages,
             functions=functions
         )
         response_message = response["choices"][0]["message"]
 
         if response_message.get("function_call"):
-            print(f"""{self.role}: {json.loads(response_message["function_call"]["arguments"])["message"]}""")
+            print(f"""{layer.role}: {json.loads(response_message["function_call"]["arguments"])["message"]}""")
             available_functions = {
-                "ask_layer": self.ask_layer
+                "ask_layer": layer.ask_layer
             }
             function_name = response_message["function_call"]["name"]
             function_to_call = available_functions[function_name]
             function_args = json.loads(response_message["function_call"]["arguments"])
             function_response = function_to_call(
-                target_layer=function_args.get("target_layer"),
+                target_layer_class=function_args.get("target_layer_class"),
                 message=function_args.get("message")
             )
 
@@ -121,20 +53,55 @@ class Layer:
                 {
                     "role": "function",
                     "name": function_name,
-                    "content": function_response
+                    "content": function_response["content"]
                 }
             )
 
             second_response = openai.ChatCompletion.create(
-                model=model,
+                model=self.model,
                 messages=messages
             )
             second_response_message = second_response["choices"][0]["message"]["content"]
-            print(f"""{self.role}: {second_response_message}""")
+            print(f"""{layer.role}: {second_response_message}""")
             return second_response
         else:
-            print(f"""{self.role}: {response_message["content"]}""")
+            print(f"""{layer.role}: {response_message["content"]}""")
             return response_message
+
+class Layer:
+    openai_communicator = OpenAICommunicator()
+    LayerType = Union['EthosLayer', 'StrategyLayer', 'IdentityLayer', 'PlanningLayer', 'ControlLayer', 'ExecutionLayer']
+
+    def __init__(self, role: str, system_prompt: str):
+        self.system_prompt = system_prompt
+        self.role = role
+
+    def ask_layer(self, target_layer_class: Type[LayerType], message: str) -> str:
+        architecture = CognitiveArchitecture()
+        layer_mapping = architecture.get_layer_mapping()
+        target_layer = layer_mapping.get(target_layer_class)
+
+        if target_layer_class not in layer_mapping:
+            print(target_layer_class)
+            print(layer_mapping)
+            raise ValueError('Invalid target_layer_class provided.')
+
+        messages = [
+            {
+                'role': 'system',
+                'content': f'''You are the {target_layer.role} layer.
+                    You are about to receive a message from the {self.role} layer.'''
+            },
+            {
+                'role': 'user',
+                'content': message
+            }
+        ]
+
+        return self.communicate_with_openai(target_layer, messages)
+
+    def communicate_with_openai(self, layer, messages: list) -> str:
+        return self.openai_communicator.communicate(layer, messages)
 
 class EthosLayer(Layer):
     def __init__(self):
@@ -172,10 +139,42 @@ class ExecutionLayer(Layer):
         self.system_prompt = "You are the Execution layer, one of six thought layers of a cognitive architecture. You carry out the tasks, actions, and commands derived from the higher layers."
         super().__init__(self.role, self.system_prompt)
 
+class CognitiveArchitecture:
+    def __init__(self):
+        self.ethos_layer = EthosLayer()
+        self.strategy_layer = StrategyLayer()
+        self.identity_layer = IdentityLayer()
+        self.planning_layer = PlanningLayer()
+        self.control_layer = ControlLayer()
+        self.execution_layer = ExecutionLayer()
+
+    def get_layer_mapping(self):
+        return {
+            "EthosLayer": self.ethos_layer,
+            "StrategyLayer": self.strategy_layer,
+            "IdentityLayer": self.identity_layer,
+            "PlanningLayer": self.planning_layer,
+            "ControlLayer": self.control_layer,
+            "ExecutionLayer": self.execution_layer
+        }
+
+    def chat(self, message):
+        chatbot = self.identity_layer
+        messages = [
+            {
+                'role': 'system',
+                'content': f'''{self.identity_layer.system_prompt}'''
+            },
+            {
+                'role': 'user',
+                'content': message
+            }
+        ]
+        chatbot.communicate_with_openai(chatbot, messages)
+
 def main():
-    get_layer_mapping()
     user_input = input("User: ")
-    identity_layer.chat(user_input)
+    CognitiveArchitecture().chat(user_input)
 
 if __name__ == '__main__':
     main()
